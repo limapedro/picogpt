@@ -49,7 +49,7 @@ class QKVAttention(nn.Module):
         self.w_v = randw(nb_heads, dim_v, dim_in)
         self.w_o = randw(dim_v * nb_heads, dim_in)
 
-    def forward(self, input, t0=None, t1=None, cache=None):
+    def forward(self, input):
         q = torch.einsum("ntc,hdc->nhtd", input, self.w_q)
         k = torch.einsum("ntc,hdc->nhtd", input, self.w_k)
         v = torch.einsum("ntc,hdc->nhtd", input, self.w_v)
@@ -153,10 +153,10 @@ class PicoGPT(nn.Module):
         return F.cross_entropy(x.transpose(1, 2), input)
 
     def inplace_ar(self, input, t_start):
-        for t1 in range(t_start, input.size(1)):
-            output = self(input)[:, t1 : t1 + 1, :]
+        for t in range(t_start, input.size(1)):
+            output = self(input)[:, t : t + 1, :]
             dist = torch.distributions.categorical.Categorical(logits=output)
-            input[:, t1 : t1 + 1] = dist.sample()
+            input[:, t : t + 1] = dist.sample()
 
 
 ######################################################################

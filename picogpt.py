@@ -31,6 +31,65 @@ class AddPositionalEncoding(nn.Module):
         return input + torch.sin(t)
 
 
+
+# Define a custom PyTorch module for rotary embeddings
+class Rotary(nn.Module):
+    def __init__(self, dim, max_seq_len=65536):
+        """
+        Initialize the Rotary positional embedding module.
+
+        Args:
+            dim (int): The dimensionality of the input tensor.
+            max_seq_len (int): The maximum sequence length supported by this module.
+        """
+        super().__init__()
+        
+        # Calculate the inverse frequency for the sinusoidal position encoding
+        # `dim // 4` means dividing the embedding space into quarters.
+        inv_freq = (1 / 256) ** torch.linspace(0.0, 1.0, steps=dim // 4, dtype=torch.float32)
+        
+        # Concatenate `inv_freq` with zeros to extend its size
+        inv_freq = torch.cat([inv_freq, inv_freq.new_zeros(dim // 4)])
+        
+        # Generate the position indices (0 to max_seq_len-1) as a tensor
+        t = torch.arange(max_seq_len, dtype=torch.float32)
+        
+        # Compute `theta` using an outer product between positions and `inv_freq`
+        # The einsum notation "i, j -> ij" multiplies each position by each frequency
+        theta = torch.einsum("i, j -> ij", t, inv_freq)
+        
+        # Precompute the cosine and sine values for `theta` to save computation
+        # and make them persistent (used across multiple forward passes).
+        self.cos = nn.Buffer(data=theta.cos(), persistent=False)
+        self.sin = nn.Buffer(data=theta.sin(), persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Apply rotary positional encoding to the input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape [batch_size, seq_len, dim].
+
+        Returns:
+            torch.Tensor: Output tensor of the same shape as the input with
+            positional encoding applied.
+        """
+        # Expand the precomputed cos and sin values to match the input tensor dimensions
+        cos, sin = self.cos[None, :, x.size(-3), None, :], self.sin[None, :, x.size(-3), None, :]
+        
+        # Split the input tensor into two halves along the last dimension
+        x1, x2 = x.to(dtype=torch.float32).chunk(chunks=2, dim=-1)
+        
+        # Apply the rotary transformation: mix cosines and sines to encode positions
+        y1 = x1 * cos - x2 * sin
+        y2 = x1 * sin + x2 * cos
+        
+        # Concatenate the transformed halves along the last dimension and return
+        return torch.cat([y1, y2], 3).type_as(other=x)
+
+
+
+
 ######################################################################
 
 

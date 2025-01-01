@@ -102,29 +102,44 @@ class QKVAttention(nn.Module):
 
         self.causal = causal
         self.dropout = dropout
+        self.nb_heads = nb_heads
 
         self.w_q = randw(nb_heads, dim_qk, dim_in)
         self.w_k = randw(nb_heads, dim_qk, dim_in)
         self.w_v = randw(nb_heads, dim_v, dim_in)
         self.w_o = randw(dim_v * nb_heads, dim_in)
 
-    def forward(self, input):
+    def forward(self, input, k_cache=None, v_cache=None):
+        # Compute Q, K, V projections
         q = torch.einsum("ntc,hdc->nhtd", input, self.w_q)
-        k = torch.einsum("ntc,hdc->nhtd", input, self.w_k)
-        v = torch.einsum("ntc,hdc->nhtd", input, self.w_v)
+        new_k = torch.einsum("ntc,hdc->nhtd", input, self.w_k)
+        new_v = torch.einsum("ntc,hdc->nhtd", input, self.w_v)
 
+        # Handle caching
+        if k_cache is not None and v_cache is not None:
+            k = torch.cat([k_cache, new_k], dim=2)  # Concatenate along the sequence dimension
+            v = torch.cat([v_cache, new_v], dim=2)
+        else:
+            k, v = new_k, new_v
+
+        # Compute scaled dot-product attention
         a = torch.einsum("nhtd,nhsd->nhts", q, k) / math.sqrt(self.w_q.size(1))
 
+        # Apply causal masking if required
         if self.causal:
-            t = torch.arange(input.size(1), device=q.device)
-            attzero = t[None, None, :, None] < t[None, None, None, :]
-            a = a.masked_fill(attzero, float("-inf"))
+            t = input.size(1)  # Current sequence length
+            causal_mask = torch.tril(torch.ones((t, t), device=q.device)).bool()
+            a = a.masked_fill(~causal_mask[None, None, :, :], float("-inf"))
 
-        a = a.softmax(dim=3)
+        # Softmax over the last dimension and apply dropout
+        a = F.softmax(a, dim=3)
         a = F.dropout(a, self.dropout, self.training)
-        y = torch.einsum("nhts,nhsd->nthd", a, v).flatten(2)
 
-        return y
+        # Combine attention weights with values
+        y = torch.einsum("nhts,nhsd->nthd", a, v).flatten(2)
+        y = torch.einsum("nthd,hdc->ntc", y, self.w_o)
+
+        return y, k, v  # Return updated keys and values for caching
 
 
 class TransformerBlock(nn.Module):
